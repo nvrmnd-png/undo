@@ -1,12 +1,12 @@
 # undo
 
-> `mv file.txt archive/` — oops — `undo`. Reversible `mv`, `cp`, `rm` and friends, with a freedesktop trash safety net.
+> `mv file.txt archive/`, oops, `undo`. Reversible `mv`, `cp`, `rm` and friends, with a freedesktop trash safety net.
 
 ![License](https://img.shields.io/badge/license-GPLv3-blue) ![Rust](https://img.shields.io/badge/rust-2024-orange) ![Shells](https://img.shields.io/badge/shell-zsh%20%7C%20bash%20%7C%20fish-lightgrey)
 
 Shell filesystem commands are unforgiving: once you `mv` over a file or `rm` a
 directory, there is no built-in way back. **undo** journals every supported
-operation and reverses it on demand — and it never deletes anything outright,
+operation and reverses it on demand, and it never deletes anything outright,
 so even `rm` is recoverable.
 
 ![undo demo: mv then undo restores the file, rm -r then undo restores it from the trash](.github/demo.gif)
@@ -118,7 +118,7 @@ pane and a live integrity badge.
 
 ### Limitations
 
-undo can only reverse what went through its wrappers — `sudo`, scripts, cron
+undo can only reverse what went through its wrappers. `sudo`, scripts, cron
 and GUI file managers bypass them (a stale journal is caught by verification,
 not blindly replayed). ACLs, xattrs, and hard-link topology inside copied trees
 are not preserved. Non-UTF-8 paths fall back to the real command. Clearing the
@@ -154,4 +154,4 @@ If undo saved you from a bad `rm`, consider chipping in:
 
 ## License
 
-GPLv3 © 2026 nvrmnd — see [LICENSE](LICENSE).
+GPLv3 © 2026 nvrmnd. See [LICENSE](LICENSE).
