@@ -9,17 +9,7 @@ directory, there is no built-in way back. **undo** journals every supported
 operation and reverses it on demand — and it never deletes anything outright,
 so even `rm` is recoverable.
 
-```console
-$ mv report.txt archive/
-$ undo
-Undid #7: mv report.txt archive/
-  move archive/report.txt -> report.txt
-
-$ rm -r build/
-$ undo
-Undid #8: rm -r build/
-  restore ~/.local/share/Trash/files/build -> build/
-```
+![undo demo: mv then undo restores the file, rm -r then undo restores it from the trash](.github/demo.gif)
 
 It works by *intercepting* commands rather than watching them: a small shell
 integration routes `mv`, `cp`, `rm`, … through undo, which performs the
