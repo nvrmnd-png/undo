@@ -1,0 +1,236 @@
+.TH UNDO 1 "July 2026" "undo 0.1.0" "User Commands"
+.SH NAME
+undo \- undo shell filesystem operations
+.SH SYNOPSIS
+.B undo
+.RI [ options ]
+.br
+.B undo
+.RB [ history | list | redo | show | clear | tui ]
+.RI [ options ]
+.br
+.B undo exec \-\-
+.I command
+.RI [ args ...]
+.br
+.B undo init
+.RI { zsh | bash | fish }
+.SH DESCRIPTION
+.B undo
+makes shell filesystem operations reversible. It wraps
+.BR mv (1),
+.BR cp (1),
+.BR rm (1),
+.BR mkdir (1),
+.BR rmdir (1),
+.BR chmod (1),
+.BR chown (1),
+.BR ln (1)
+and
+.BR rename (1),
+records every operation in a per\-user SQLite journal, and can roll each one
+back \(em or replay it.
+.PP
+Because a filesystem operation cannot be reconstructed after the fact
+(a native
+.BR rm
+destroys the data), undo does not observe commands \(em it
+.B executes
+them itself. A shell integration (see
+.BR "SHELL INTEGRATION" )
+transparently routes the wrapped commands through
+.BR "undo exec" .
+Deletions never unlink data: they move it to the freedesktop.org trash, from
+where undo restores it precisely.
+.PP
+With no subcommand,
+.B undo
+reverses the most recent operation.
+.SH COMMANDS
+.TP
+.B undo
+Undo the most recent applied operation.
+.TP
+.B undo redo
+Re\-apply the most recently undone operation. Performing a new operation
+clears the redo stack (the undone entries become
+.IR superseded ).
+.TP
+.B undo list
+Show the actionable undo and redo stacks (newest first).
+.TP
+.BI "undo history " "[\-n N] [\-\-all]"
+Show the full journal, every status included. Defaults to the 50 newest
+entries.
+.TP
+.BI "undo show " id
+Show one journal entry in detail: its recorded actions, trash locations and
+any forced evictions.
+.TP
+.BI "undo clear " "[\-\-yes]"
+Forget all journal entries for the current user. Prompts unless
+.B \-\-yes
+is given.
+.B The trash is never touched
+\(em cleared history just stops tracking, it does not delete anything.
+.TP
+.B undo tui
+Browse the journal interactively (colored terminal UI) and undo/redo entries
+with a live integrity check. Requires a terminal.
+.TP
+.BI "undo exec \-\- " "command args ..."
+Execute a supported command and journal it. Used by the shell integration;
+you normally do not call this directly.
+.TP
+.BI "undo init " shell
+Print the shell integration snippet for
+.IR zsh ,
+.I bash
+or
+.IR fish .
+.SH OPTIONS
+.TP
+.B \-f, \-\-force
+Override a refused undo/redo. Files occupying a landing site are moved to the
+trash first (recorded as evictions). Never overrides ownership or
+protected\-path checks.
+.TP
+.B \-\-dry\-run
+Report what an undo/redo would do, and whether it would be refused, without
+changing anything.
+.TP
+.B \-\-json
+Emit one machine\-readable JSON document on stdout (schema 1). Not available
+for
+.B exec
+or
+.BR tui .
+.TP
+.B \-\-yaml
+Emit YAML instead of JSON.
+.SH SHELL INTEGRATION
+Add the appropriate line to your shell startup file:
+.PP
+.RS
+.EX
+# ~/.zshrc
+eval "$(undo init zsh)"
+
+# ~/.bashrc
+eval "$(undo init bash)"
+
+# ~/.config/fish/config.fish
+undo init fish | source
+.EE
+.RE
+.PP
+The snippet defines wrapper functions for the nine supported commands that
+route through
+.BR "undo exec" .
+A recursion guard
+.RB ( UNDO_ACTIVE )
+prevents re\-entry. Bypass a wrapper for a single call with
+.B command mv ...
+or
+.BR \emv .
+Set
+.B UNDO_QUIET_FALLBACK
+to silence the notice printed when a command falls back to the real tool.
+.SH INTEGRITY AND SAFETY
+Before an undo or redo, undo verifies that the recorded post\-state still
+matches the filesystem: content by BLAKE3 checksum (for files up to
+.BR UNDO_HASH_MAX_BYTES ,
+64 MiB by default), otherwise by size and modification time; symlinks by
+target; directory trees by an aggregate fingerprint. A mismatch refuses the
+operation unless
+.B \-\-force
+is given. Symbolic links are never followed during inspection.
+.PP
+Operations are serialized by an exclusive lock, and each mutation re\-checks
+its target immediately beforehand to shrink the race window. A crash
+mid\-operation leaves a
+.I broken
+entry; nothing is lost, because every displaced node is in the trash.
+.PP
+Rollback is limited to the invoking user: the journal is private
+.RB ( 0600 ,
+ownership\-checked) and entries created by another uid are refused.
+.SH EXIT STATUS
+.TP
+.B 0
+Success.
+.TP
+.B 1
+Runtime failure, or an undo/redo refused by an integrity check.
+.TP
+.B 2
+Usage error, or a refusal to operate on a protected path
+.RB ( / ,
+your home directory, the trash, or undo's own data).
+.TP
+.B 125
+(\c
+.B undo exec
+only) The invocation is not supported; the shell wrapper runs the real
+command instead. Returned only before any filesystem change.
+.SH ENVIRONMENT
+.TP
+.B UNDO_DATA_DIR
+Journal + lock location. Defaults to
+.IR $XDG_DATA_HOME/undo ,
+else
+.IR ~/.local/share/undo .
+.TP
+.B UNDO_HASH_MAX_BYTES
+Maximum file size that gets a content checksum (default 67108864).
+.TP
+.B UNDO_TREE_CAP
+Node limit above which recursive operations are not journaled and fall back
+to the real command (default 10000).
+.TP
+.B UNDO_QUIET_FALLBACK
+If set, the shell wrapper does not announce fallbacks.
+.TP
+.B NO_COLOR
+Disables colored output (also auto\-disabled when stdout is not a terminal).
+.SH LIMITATIONS
+Only commands that go through the wrappers are journaled;
+.BR sudo ,
+scripts, cron jobs and graphical file managers bypass them. Verification (not
+blind replay) is what keeps a stale journal from causing harm.
+.PP
+Files above the checksum limit are verified by size and mtime only. Recorded
+metadata does not include ACLs, extended attributes, hard\-link topology
+within copied trees, or parent\-directory timestamps. Non\-UTF\-8 paths are not
+journaled and fall back to the real command. The trash is the home trash
+.RI ( $XDG_DATA_HOME/Trash );
+cross\-device operations are handled by a verified copy. Clearing the journal
+does not empty the trash.
+.SH EXAMPLES
+.TP
+.B mv report.txt archive/ ; undo
+Move a file, then move it back.
+.TP
+.B rm \-r build/ ; undo
+Send a tree to the trash, then restore it.
+.TP
+.B undo history \-\-json | jq .
+Inspect the journal as JSON.
+.TP
+.B undo show 12
+Show what operation #12 did and how it will be reversed.
+.SH SEE ALSO
+.BR mv (1),
+.BR cp (1),
+.BR rm (1),
+.BR chmod (1),
+.BR chown (1),
+.BR ln (1),
+.BR rename (1)
+.SH AUTHOR
+nvrmnd
+.SH COPYRIGHT
+Copyright (c) 2026 nvrmnd. License GPLv3+: GNU GPL version 3 or later
+<https://gnu.org/licenses/gpl.html>. This is free software: you are free
+to change and redistribute it. There is NO WARRANTY, to the extent
+permitted by law.
