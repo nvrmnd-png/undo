@@ -221,6 +221,28 @@ impl Details {
             broken_at: None,
         }
     }
+
+    pub fn trash_refs(&self) -> Vec<&TrashRef> {
+        let mut refs = Vec::new();
+        for action in &self.actions {
+            match action {
+                Action::Move { backup, .. }
+                | Action::MoveXdev { backup, .. }
+                | Action::Copy { backup, .. }
+                | Action::Symlink { backup, .. }
+                | Action::Hardlink { backup, .. } => {
+                    if let Some(b) = backup {
+                        refs.push(b);
+                    }
+                }
+                Action::TrashPut { trash, .. } => refs.push(trash),
+                _ => {}
+            }
+        }
+        refs.extend(self.force_evictions.iter());
+        refs.extend(self.undo_artifacts.iter());
+        refs
+    }
 }
 
 impl Default for Details {

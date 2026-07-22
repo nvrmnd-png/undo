@@ -4,11 +4,15 @@ use std::process::ExitCode;
 use thiserror::Error;
 
 pub const FALLBACK_CODE: u8 = 125;
+pub const EXCLUDED_CODE: u8 = 126;
 
 #[derive(Debug, Error)]
 pub enum UndoError {
     #[error("{0}")]
     Fallback(String),
+
+    #[error("{0}")]
+    Excluded(String),
 
     #[error("{0}")]
     Usage(String),
@@ -45,6 +49,10 @@ impl UndoError {
         UndoError::Fallback(m.into())
     }
 
+    pub fn excluded(m: impl Into<String>) -> Self {
+        UndoError::Excluded(m.into())
+    }
+
     pub fn io(ctx: impl Into<String>, source: io::Error) -> Self {
         UndoError::Io {
             ctx: ctx.into(),
@@ -55,6 +63,7 @@ impl UndoError {
     pub fn exit_code(&self) -> ExitCode {
         match self {
             UndoError::Fallback(_) => ExitCode::from(FALLBACK_CODE),
+            UndoError::Excluded(_) => ExitCode::from(EXCLUDED_CODE),
             UndoError::Usage(_) => ExitCode::from(2),
             _ => ExitCode::FAILURE,
         }

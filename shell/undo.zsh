@@ -8,8 +8,10 @@ _undo_wrap() {
   fi
   UNDO_ACTIVE=1 command undo exec -- "$cmd" "$@"
   local rc=$?
-  if (( rc == 125 )); then
-    [[ -n $UNDO_QUIET_FALLBACK ]] || print -u2 "undo: unsupported invocation, running real $cmd (not journaled)"
+  if (( rc == 125 || rc == 126 )); then
+    if (( rc == 125 )) && [[ -z $UNDO_QUIET_FALLBACK ]]; then
+      print -u2 "undo: unsupported invocation, running real $cmd (not journaled)"
+    fi
     command "$cmd" "$@"
     return $?
   fi

@@ -27,6 +27,17 @@ pub struct Report {
     pub dry_run: bool,
 }
 
+#[derive(Debug)]
+pub struct PruneReport {
+    pub candidates: usize,
+    pub removed: usize,
+    pub trash_purged: usize,
+    pub size_before: u64,
+    pub size_after: u64,
+    pub dry_run: bool,
+    pub empty_trash: bool,
+}
+
 pub struct Engine {
     pub journal: Journal,
     trash: Trash,
@@ -43,6 +54,74 @@ impl Engine {
             limits: Limits::from_env(),
             data_dir,
         })
+    }
+
+    pub fn prune(
+        &mut self,
+        older_than_days: u64,
+        empty_trash: bool,
+        dry_run: bool,
+    ) -> Result<PruneReport> {
+        let _lock = lockfile::acquire(&self.data_dir)?;
+        let cutoff_ms =
+            jiff::Timestamp::now().as_millisecond() - (older_than_days as i64) * 86_400_000;
+        let victims = self.journal.select_older_than(cutoff_ms)?;
+        let size_before = self.journal.db_size_bytes().unwrap_or(0);
+        if dry_run {
+            return Ok(PruneReport {
+                candidates: victims.len(),
+                removed: 0,
+                trash_purged: 0,
+                size_before,
+                size_after: size_before,
+                dry_run: true,
+                empty_trash,
+            });
+        }
+        let ids: Vec<i64> = victims.iter().map(|o| o.id).collect();
+        let removed = self.journal.delete_ids(&ids)?;
+        let mut trash_purged = 0;
+        if empty_trash {
+            for op in &victims {
+                for tref in op.details.trash_refs() {
+                    if self.trash.purge(tref).is_ok() {
+                        trash_purged += 1;
+                    }
+                }
+            }
+        }
+        self.journal.vacuum()?;
+        let size_after = self.journal.db_size_bytes().unwrap_or(size_before);
+        Ok(PruneReport {
+            candidates: victims.len(),
+            removed,
+            trash_purged,
+            size_before,
+            size_after,
+            dry_run: false,
+            empty_trash,
+        })
+    }
+
+    pub fn maybe_autoprune(&mut self) {
+        let config = match crate::config::Config::load() {
+            Ok(c) => c,
+            Err(_) => return,
+        };
+        if !config.cleanup.enabled {
+            return;
+        }
+        let day_ms: i64 = 24 * 60 * 60 * 1000;
+        let now = jiff::Timestamp::now().as_millisecond();
+        let marker = self.data_dir.join(".last_prune");
+        if let Ok(s) = std::fs::read_to_string(&marker)
+            && let Ok(last) = s.trim().parse::<i64>()
+            && now - last < day_ms
+        {
+            return;
+        }
+        let _ = self.prune(config.cleanup.max_age_days, false, false);
+        let _ = std::fs::write(&marker, now.to_string());
     }
 
     pub fn undo(&mut self, target: Target, force: bool, dry_run: bool) -> Result<Report> {

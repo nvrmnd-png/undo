@@ -1,4 +1,5 @@
 pub mod cli;
+pub mod config;
 pub mod engine;
 pub mod error;
 pub mod exec;
@@ -11,3 +12,4 @@ pub mod shellinit;
 pub mod state;
 pub mod trash;
 pub mod tui;
+pub mod update;

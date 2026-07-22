@@ -1,4 +1,5 @@
 mod app;
+pub mod config;
 mod ui;
 
 use std::io::IsTerminal;

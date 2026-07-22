@@ -36,10 +36,33 @@ pub enum Cmd {
     },
     Redo,
     List,
+    Search {
+        needle: String,
+    },
+    Log {
+        #[arg(short = 'n', long, default_value_t = 50)]
+        limit: usize,
+    },
     Show {
         id: i64,
     },
+    Repair {
+        #[arg(long)]
+        yes: bool,
+    },
     Clear {
+        #[arg(long)]
+        yes: bool,
+    },
+    Config {
+        #[command(subcommand)]
+        action: Option<ConfigAction>,
+    },
+    Prune {
+        #[arg(long)]
+        older_than: Option<u64>,
+        #[arg(long)]
+        empty_trash: bool,
         #[arg(long)]
         yes: bool,
     },
@@ -51,6 +74,12 @@ pub enum Cmd {
         #[arg(value_enum)]
         shell: ShellKind,
     },
+    Update {
+        #[arg(long)]
+        check: bool,
+        #[arg(long)]
+        yes: bool,
+    },
     Tui,
 }
 
@@ -59,6 +88,15 @@ pub enum ShellKind {
     Zsh,
     Bash,
     Fish,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum ConfigAction {
+    Show,
+    Reset {
+        #[arg(long)]
+        yes: bool,
+    },
 }
 
 #[cfg(test)]

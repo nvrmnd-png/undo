@@ -44,10 +44,17 @@ fn xdg_data_home() -> Result<PathBuf> {
 }
 
 pub fn data_dir() -> Result<PathBuf> {
-    match env::var_os("UNDO_DATA_DIR") {
-        Some(d) if !d.is_empty() => Ok(PathBuf::from(d)),
-        _ => Ok(xdg_data_home()?.join("undo")),
+    if let Some(d) = env::var_os("UNDO_DATA_DIR")
+        && !d.is_empty()
+    {
+        return Ok(PathBuf::from(d));
     }
+    if let Ok(config) = crate::config::Config::load()
+        && let Some(dir) = config.data_dir_override()?
+    {
+        return Ok(dir);
+    }
+    Ok(xdg_data_home()?.join("undo"))
 }
 
 pub fn ensure_data_dir() -> Result<PathBuf> {

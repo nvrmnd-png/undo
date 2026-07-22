@@ -27,6 +27,8 @@ pub struct Session {
     pending_id: Option<i64>,
     details: Details,
     failed: bool,
+    excludes: Vec<PathBuf>,
+    logging: bool,
 }
 
 impl Session {
@@ -34,6 +36,13 @@ impl Session {
         let cwd =
             std::env::current_dir().map_err(|e| UndoError::io("resolving working directory", e))?;
         let data_dir = paths::ensure_data_dir()?;
+        let config = crate::config::Config::load().unwrap_or_default();
+        let excludes = config
+            .exclude
+            .paths
+            .iter()
+            .filter_map(|p| paths::absolutize(Path::new(p)).ok())
+            .collect();
         Ok(Session {
             cmd,
             argv: argv.to_vec(),
@@ -48,6 +57,8 @@ impl Session {
             pending_id: None,
             details: Details::new(),
             failed: false,
+            excludes,
+            logging: config.logging.enabled,
         })
     }
 
@@ -91,6 +102,15 @@ impl Session {
                 self.cmd,
                 abs.display()
             )));
+        }
+        for ex in &self.excludes {
+            if abs == *ex || abs.starts_with(ex) {
+                return Err(UndoError::excluded(format!(
+                    "{}: {} is on the exclude list; not journaling",
+                    self.cmd,
+                    abs.display()
+                )));
+            }
         }
         Ok(())
     }
@@ -165,9 +185,32 @@ impl Session {
                 self.journal.delete_row(id)?;
             } else {
                 self.journal.finalize_exec(id, &self.details)?;
+                self.log_operation();
             }
         }
         Ok(if self.failed { 1 } else { 0 })
+    }
+
+    fn log_operation(&self) {
+        if !self.logging {
+            return;
+        }
+        let ts = jiff::Zoned::now().strftime("%Y-%m-%dT%H:%M:%S%:z");
+        let line = format!(
+            "{ts}\tuid={}\t{}\t{}\tcwd={}\n",
+            paths::euid(),
+            self.cmd,
+            self.argv.join(" "),
+            self.cwd.display()
+        );
+        let logfile = self.data_dir.join("undo.log");
+        if let Ok(mut f) = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&logfile)
+        {
+            let _ = f.write_all(line.as_bytes());
+        }
     }
 }
 

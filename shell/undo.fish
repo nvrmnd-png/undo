@@ -7,8 +7,8 @@ function _undo_wrap
     end
     env UNDO_ACTIVE=1 undo exec -- $cmd $argv
     set -l rc $status
-    if test $rc -eq 125
-        if not set -q UNDO_QUIET_FALLBACK
+    if test $rc -eq 125; or test $rc -eq 126
+        if test $rc -eq 125; and not set -q UNDO_QUIET_FALLBACK
             echo "undo: unsupported invocation, running real $cmd (not journaled)" >&2
         end
         command $cmd $argv

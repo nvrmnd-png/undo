@@ -1,4 +1,4 @@
-.TH UNDO 1 "July 2026" "undo 0.1.0" "User Commands"
+.TH UNDO 1 "July 2026" "undo 0.1.3" "User Commands"
 .SH NAME
 undo \- undo shell filesystem operations
 .SH SYNOPSIS
@@ -63,9 +63,40 @@ Show the actionable undo and redo stacks (newest first).
 Show the full journal, every status included. Defaults to the 50 newest
 entries.
 .TP
+.BI "undo search " name
+Show journal entries whose command line or working directory contains
+.IR name .
+.TP
+.BI "undo log " "[\-n N]"
+Show an activity log: for each entry, when it ran, which command, and the
+files it affected. Defaults to the 50 newest entries.
+.TP
 .BI "undo show " id
 Show one journal entry in detail: its recorded actions, trash locations and
 any forced evictions.
+.TP
+.BI "undo repair " "[\-\-yes]"
+Check the journal database and, if it is damaged, back it up
+.RI ( journal.db.corrupt\-<ts> )
+and rebuild it. Prompts unless
+.B \-\-yes
+is given. The trash is never touched.
+.TP
+.BI "undo prune " "[\-\-older\-than N] [\-\-empty\-trash] [\-\-yes]"
+Drop journal entries older than
+.I N
+days (default: the configured
+.IR max_age_days ).
+By default the trashed files are kept and stay recoverable; with
+.B \-\-empty\-trash
+they are permanently deleted too. With
+.B \-\-dry\-run
+nothing is removed, only reported.
+.TP
+.BI "undo config " "[show | reset]"
+Edit settings in a terminal UI. \fBshow\fR prints the current configuration;
+\fBreset\fR restores defaults. The config file is
+.IR $XDG_CONFIG_HOME/undo/config.toml .
 .TP
 .BI "undo clear " "[\-\-yes]"
 Forget all journal entries for the current user. Prompts unless
@@ -88,6 +119,13 @@ Print the shell integration snippet for
 .I bash
 or
 .IR fish .
+Any configured plugin aliases are wrapped as well.
+.TP
+.BI "undo update " "[\-\-check]"
+Check GitHub for a newer release and install it, verifying the SHA\-256 of the
+download and replacing the running binary. With
+.B \-\-check
+only report whether an update is available.
 .SH OPTIONS
 .TP
 .B \-f, \-\-force
@@ -173,6 +211,32 @@ your home directory, the trash, or undo's own data).
 .B undo exec
 only) The invocation is not supported; the shell wrapper runs the real
 command instead. Returned only before any filesystem change.
+.TP
+.B 126
+(\c
+.B undo exec
+only) An operand is on the configured exclude list; the shell wrapper runs
+the real command silently, without journaling.
+.SH CONFIGURATION
+Settings are read from
+.IR $XDG_CONFIG_HOME/undo/config.toml
+(else
+.IR ~/.config/undo/config.toml ).
+Sections:
+.B [cleanup]
+.RI ( enabled ", " max_age_days ", " max_database_size ) ,
+.B [storage]
+.RI ( path " \(em relocates the journal; the trash stays in XDG),"
+.B [exclude]
+.RI ( paths " \(em operations here are not journaled),"
+.B [logging]
+.RI ( enabled " \(em append each operation to " undo.log ),
+and
+.B [plugins]
+(map your own command names to a built\-in, e.g.
+.IR "mycp = \"cp\"" ).
+Edit interactively with
+.BR "undo config" .
 .SH ENVIRONMENT
 .TP
 .B UNDO_DATA_DIR
@@ -230,7 +294,6 @@ Show what operation #12 did and how it will be reversed.
 .SH AUTHOR
 nvrmnd
 .SH COPYRIGHT
-Copyright (c) 2026 nvrmnd. License GPLv3+: GNU GPL version 3 or later
-<https://gnu.org/licenses/gpl.html>. This is free software: you are free
-to change and redistribute it. There is NO WARRANTY, to the extent
-permitted by law.
+Copyright (c) 2026 nvrmnd. Released under the MIT License. This is free
+software: you are free to change and redistribute it. There is NO WARRANTY,
+to the extent permitted by law.

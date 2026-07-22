@@ -34,11 +34,26 @@ impl TestEnv {
         cmd.current_dir(&self.work)
             .env("HOME", &self.home)
             .env("XDG_DATA_HOME", self.home.join(".local/share"))
+            .env("XDG_CONFIG_HOME", self.home.join(".config"))
             .env("UNDO_DATA_DIR", &self.data)
             .env("NO_COLOR", "1")
             .env_remove("UNDO_HASH_MAX_BYTES")
             .env_remove("UNDO_TREE_CAP");
         cmd
+    }
+
+    pub fn config_file(&self) -> PathBuf {
+        self.home.join(".config/undo/config.toml")
+    }
+
+    pub fn write_config(&self, toml: &str) {
+        let p = self.config_file();
+        fs::create_dir_all(p.parent().unwrap()).unwrap();
+        fs::write(p, toml).unwrap();
+    }
+
+    pub fn logfile(&self) -> PathBuf {
+        self.data.join("undo.log")
     }
 
     pub fn exec(&self, args: &[&str]) -> Command {

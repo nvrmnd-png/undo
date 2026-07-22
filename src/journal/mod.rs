@@ -42,10 +42,26 @@ impl Journal {
             fs::set_permissions(&db, fs::Permissions::from_mode(0o600))
                 .ctx(format!("securing {}", db.display()))?;
         }
-        conn.pragma_update(None, "journal_mode", "WAL")?;
-        conn.pragma_update(None, "synchronous", "NORMAL")?;
-        conn.pragma_update(None, "busy_timeout", 5000)?;
-        schema::migrate(&conn)?;
+        let setup = (|| -> Result<()> {
+            conn.pragma_update(None, "journal_mode", "WAL")?;
+            conn.pragma_update(None, "synchronous", "NORMAL")?;
+            conn.pragma_update(None, "busy_timeout", 5000)?;
+            schema::migrate(&conn)?;
+            Ok(())
+        })();
+        if let Err(e) = setup {
+            if existed {
+                return Err(UndoError::msg(format!(
+                    "journal database looks damaged ({e}). Run 'undo repair' to rebuild it (your trash stays intact)."
+                )));
+            }
+            return Err(e);
+        }
+        if existed && let Ok(Some(reason)) = quick_check(&conn) {
+            eprintln!(
+                "undo: warning: journal database failed its integrity check ({reason}). Run 'undo repair' to rebuild it (your trash stays intact)."
+            );
+        }
         Ok(Journal { conn, uid })
     }
 
@@ -174,6 +190,24 @@ impl Journal {
             .map_err(Into::into)
     }
 
+    pub fn search(&self, needle: &str) -> Result<Vec<Operation>> {
+        let pattern = format!(
+            "%{}%",
+            needle
+                .replace('\\', "\\\\")
+                .replace('%', "\\%")
+                .replace('_', "\\_")
+        );
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT {COLS} FROM operations
+             WHERE uid = ?1 AND (cwd LIKE ?2 ESCAPE '\\' OR argv LIKE ?2 ESCAPE '\\')
+             ORDER BY id DESC"
+        ))?;
+        let rows = stmt.query_map(params![self.uid, pattern], row_to_op)?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
+    }
+
     fn by_status(&self, status: Status, limit: usize) -> Result<Vec<Operation>> {
         let mut stmt = self.conn.prepare(&format!(
             "SELECT {COLS} FROM operations WHERE uid = ?1 AND status = ?2 ORDER BY id DESC LIMIT {limit}"
@@ -195,6 +229,37 @@ impl Journal {
             .conn
             .execute("DELETE FROM operations WHERE uid = ?1", params![self.uid])?;
         Ok(n)
+    }
+
+    pub fn select_older_than(&self, cutoff_ms: i64) -> Result<Vec<Operation>> {
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT {COLS} FROM operations WHERE uid = ?1 AND ts_ms < ?2 ORDER BY id DESC"
+        ))?;
+        let rows = stmt.query_map(params![self.uid, cutoff_ms], row_to_op)?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(Into::into)
+    }
+
+    pub fn delete_ids(&self, ids: &[i64]) -> Result<usize> {
+        let mut n = 0;
+        for id in ids {
+            n += self.conn.execute(
+                "DELETE FROM operations WHERE id = ?1 AND uid = ?2",
+                params![id, self.uid],
+            )?;
+        }
+        Ok(n)
+    }
+
+    pub fn vacuum(&self) -> Result<()> {
+        self.conn.execute("VACUUM", [])?;
+        Ok(())
+    }
+
+    pub fn db_size_bytes(&self) -> Result<u64> {
+        let page_count: i64 = self.conn.query_row("PRAGMA page_count", [], |r| r.get(0))?;
+        let page_size: i64 = self.conn.query_row("PRAGMA page_size", [], |r| r.get(0))?;
+        Ok(page_count.max(0) as u64 * page_size.max(0) as u64)
     }
 
     pub fn delete_row(&self, id: i64) -> Result<()> {
@@ -241,6 +306,90 @@ impl Journal {
             ],
         )?;
         Ok(self.conn.last_insert_rowid())
+    }
+}
+
+fn quick_check(conn: &Connection) -> Result<Option<String>> {
+    let mut stmt = conn.prepare("PRAGMA quick_check")?;
+    let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+    let results: Vec<String> = rows.collect::<rusqlite::Result<_>>()?;
+    if results.len() == 1 && results[0] == "ok" {
+        Ok(None)
+    } else {
+        Ok(Some(results.join("; ")))
+    }
+}
+
+fn check_owner(db: &Path) -> Result<()> {
+    let uid = paths::euid();
+    let meta = fs::metadata(db).ctx(format!("checking {}", db.display()))?;
+    if meta.uid() != uid {
+        return Err(UndoError::msg(format!(
+            "{} is owned by uid {}, not you (uid {}) — refusing to use it",
+            db.display(),
+            meta.uid(),
+            uid
+        )));
+    }
+    Ok(())
+}
+
+pub fn db_health(data_dir: &Path) -> Result<Option<String>> {
+    let db = paths::journal_path(data_dir);
+    if !db.exists() {
+        return Ok(None);
+    }
+    check_owner(&db)?;
+    match Connection::open(&db) {
+        Ok(conn) => match quick_check(&conn) {
+            Ok(result) => Ok(result),
+            Err(e) => Ok(Some(e.to_string())),
+        },
+        Err(e) => Ok(Some(e.to_string())),
+    }
+}
+
+pub fn repair(data_dir: &Path) -> Result<String> {
+    let db = paths::journal_path(data_dir);
+    if !db.exists() {
+        return Err(UndoError::msg("no journal database to repair"));
+    }
+    check_owner(&db)?;
+
+    let ts = jiff::Zoned::now().strftime("%Y%m%d-%H%M%S");
+    let backup = data_dir.join(format!("journal.db.corrupt-{ts}"));
+    fs::copy(&db, &backup).ctx(format!("backing up to {}", backup.display()))?;
+
+    let repaired = data_dir.join("journal.db.repaired");
+    let _ = fs::remove_file(&repaired);
+    let rebuilt = (|| -> Result<()> {
+        let conn = Connection::open(&db)?;
+        conn.execute("VACUUM INTO ?1", params![repaired.to_string_lossy()])?;
+        Ok(())
+    })()
+    .is_ok();
+
+    let wal = data_dir.join("journal.db-wal");
+    let shm = data_dir.join("journal.db-shm");
+    fs::remove_file(&db).ctx(format!("removing {}", db.display()))?;
+    let _ = fs::remove_file(&wal);
+    let _ = fs::remove_file(&shm);
+
+    if rebuilt {
+        fs::rename(&repaired, &db).ctx(format!("installing rebuilt {}", db.display()))?;
+        fs::set_permissions(&db, fs::Permissions::from_mode(0o600))
+            .ctx(format!("securing {}", db.display()))?;
+        Ok(format!(
+            "Rebuilt the journal from recoverable data. A copy of the damaged database is at {}.",
+            backup.display()
+        ))
+    } else {
+        let _ = fs::remove_file(&repaired);
+        Journal::open(data_dir)?;
+        Ok(format!(
+            "The database was unrecoverable, so a fresh journal was started. The damaged copy is at {}. Your trash is untouched.",
+            backup.display()
+        ))
     }
 }
 

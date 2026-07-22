@@ -35,18 +35,37 @@ pub fn run(args: Vec<OsString>) -> Result<u8> {
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| first.clone());
 
-    match cmd.as_str() {
-        "mv" => mv::run(&argv),
-        "cp" => cp::run(&argv),
-        "rm" => rm::run(&argv),
-        "mkdir" => mkdir::run(&argv),
-        "rmdir" => rmdir::run(&argv),
-        "chmod" => chmod::run(&argv),
-        "chown" => chown::run(&argv),
-        "ln" => ln::run(&argv),
-        "rename" => rename::run(&argv),
-        other => Err(UndoError::usage(format!(
-            "exec: unsupported command '{other}' (supported: mv cp rm mkdir rmdir chmod chown ln rename)"
-        ))),
+    if let Some(result) = dispatch(&cmd, &argv) {
+        return result;
     }
+
+    // Not a built-in: consult the user's plugin aliases.
+    let config = crate::config::Config::load().unwrap_or_default();
+    if let Some(target) = config.plugins.get(&cmd) {
+        if let Some(result) = dispatch(target, &argv) {
+            return result;
+        }
+        return Err(UndoError::usage(format!(
+            "exec: alias '{cmd}' maps to unknown command '{target}' (must be one of: mv cp rm mkdir rmdir chmod chown ln rename)"
+        )));
+    }
+
+    Err(UndoError::usage(format!(
+        "exec: unsupported command '{cmd}' (supported: mv cp rm mkdir rmdir chmod chown ln rename)"
+    )))
+}
+
+fn dispatch(builtin: &str, argv: &[String]) -> Option<Result<u8>> {
+    Some(match builtin {
+        "mv" => mv::run(argv),
+        "cp" => cp::run(argv),
+        "rm" => rm::run(argv),
+        "mkdir" => mkdir::run(argv),
+        "rmdir" => rmdir::run(argv),
+        "chmod" => chmod::run(argv),
+        "chown" => chown::run(argv),
+        "ln" => ln::run(argv),
+        "rename" => rename::run(argv),
+        _ => return None,
+    })
 }

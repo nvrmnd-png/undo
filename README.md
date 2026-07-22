@@ -2,7 +2,7 @@
 
 > `mv file.txt archive/`, oops, `undo`. Reversible `mv`, `cp`, `rm` and friends, with a freedesktop trash safety net.
 
-![License](https://img.shields.io/badge/license-GPLv3-blue) ![Rust](https://img.shields.io/badge/rust-2024-orange) ![Shells](https://img.shields.io/badge/shell-zsh%20%7C%20bash%20%7C%20fish-lightgrey)
+![License](https://img.shields.io/badge/license-MIT-blue) ![Rust](https://img.shields.io/badge/rust-2024-orange) ![Shells](https://img.shields.io/badge/shell-zsh%20%7C%20bash%20%7C%20fish-lightgrey)
 
 Shell filesystem commands are unforgiving: once you `mv` over a file or `rm` a
 directory, there is no built-in way back. **undo** journals every supported
@@ -68,8 +68,14 @@ wrapper for a single call with `command mv …` or `\mv …`.
 | `undo redo` | re-apply the most recently undone operation |
 | `undo list` | show the undo and redo stacks |
 | `undo history` | show the full journal (`-n N`, `--all`) |
+| `undo search <name>` | find entries by filename or path |
+| `undo log` | activity log: when, which command, which files |
 | `undo show <id>` | show one entry in detail |
 | `undo clear` | forget the journal (never touches the trash) |
+| `undo prune` | drop old journal entries (`--older-than N`, `--empty-trash`) |
+| `undo repair` | check and rebuild a damaged journal database |
+| `undo config` | edit settings in a TUI (`show`, `reset`) |
+| `undo update` | update to the latest release (`--check`) |
 | `undo tui` | browse and undo/redo interactively |
 | `undo init <shell>` | print the shell integration snippet |
 
@@ -102,6 +108,49 @@ pane and a live integrity badge.
 | `f` | toggle `--force` |
 | `?` | help |
 | `q` | quit |
+
+## Configuration
+
+Settings live in `~/.config/undo/config.toml`. Edit them in a TUI with
+`undo config`, print them with `undo config show`, or write the file yourself:
+
+```toml
+[cleanup]
+enabled = true          # run a light prune automatically (journal only)
+max_age_days = 90
+max_database_size = 500
+
+[storage]
+path = "~/.undo"        # where the journal lives (the trash stays in XDG)
+
+[exclude]
+paths = ["node_modules", ".cache"]   # operations here are not journaled
+
+[logging]
+enabled = true          # append each journaled operation to undo.log
+
+[plugins]
+mycp = "cp"             # your own command names, mapped to a built-in
+trashit = "rm"
+```
+
+### Plugins (command aliases)
+
+If you have your own wrapper commands, map them to a built-in under
+`[plugins]` (each value must be one of the nine supported commands). They then
+run through undo just like the originals and become undoable. After adding an
+alias, re-run `eval "$(undo init zsh)"` (or open a new shell) so the wrapper
+picks it up.
+
+### Staying current
+
+`undo update` checks GitHub for a newer release and installs it (verifying the
+SHA-256); `undo update --check` only reports whether one is available.
+
+`undo prune` drops journal entries older than `--older-than N` days (default
+`max_age_days`). By default it keeps trashed files (you can still restore them
+from your file manager); pass `--empty-trash` to permanently delete them too.
+`--dry-run` shows what would be removed without touching anything.
 
 ## Safety
 
@@ -154,4 +203,6 @@ If undo saved you from a bad `rm`, consider chipping in:
 
 ## License
 
-GPLv3 © 2026 nvrmnd. See [LICENSE](LICENSE).
+MIT © 2026 nvrmnd. See [LICENSE](LICENSE).
+
+(v0.1.0 was released under GPLv3 and stays GPLv3; v0.1.1 onward is MIT.)

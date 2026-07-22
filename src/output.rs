@@ -119,6 +119,57 @@ struct ClearView {
     cleared: usize,
 }
 
+#[derive(Serialize)]
+struct SearchView {
+    schema: u32,
+    needle: String,
+    entries: Vec<EntryView>,
+}
+
+#[derive(Serialize)]
+struct ConfigView<'a> {
+    schema: u32,
+    config: &'a crate::config::Config,
+}
+
+#[derive(Serialize)]
+struct LogEntryView {
+    id: i64,
+    ts: String,
+    command: String,
+    status: String,
+    cwd: String,
+    files: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct LogView {
+    schema: u32,
+    entries: Vec<LogEntryView>,
+}
+
+fn affected_files(op: &Operation) -> Vec<String> {
+    use crate::journal::model::Action;
+    let mut files: Vec<String> = Vec::new();
+    for action in &op.details.actions {
+        let path = match action {
+            Action::Move { dst, .. } | Action::MoveXdev { dst, .. } => dst.as_path(),
+            Action::Copy { dst, .. } | Action::CopyTree { dst, .. } => dst.as_path(),
+            Action::TrashPut { origin, .. } => origin.as_path(),
+            Action::CreateDir { path, .. } => path.as_path(),
+            Action::SetMode { path, .. } => path.as_path(),
+            Action::SetOwner { path, .. } => path.as_path(),
+            Action::Symlink { link, .. } => link.as_path(),
+            Action::Hardlink { link, .. } => link.as_path(),
+        };
+        let s = path.display().to_string();
+        if !files.contains(&s) {
+            files.push(s);
+        }
+    }
+    files
+}
+
 fn emit<T: Serialize>(format: Format, payload: &T) -> Result<()> {
     match format {
         Format::Json => println!("{}", serde_json::to_string_pretty(payload)?),
@@ -287,6 +338,66 @@ pub fn print_history(format: Format, entries: &[Operation]) -> Result<()> {
     Ok(())
 }
 
+pub fn print_search(format: Format, needle: &str, entries: &[Operation]) -> Result<()> {
+    if format.is_machine() {
+        return emit(
+            format,
+            &SearchView {
+                schema: SCHEMA_VERSION,
+                needle: needle.to_string(),
+                entries: entries.iter().map(EntryView::from_op).collect(),
+            },
+        );
+    }
+    if entries.is_empty() {
+        println!("No journal entries match '{needle}'.");
+        return Ok(());
+    }
+    print_table(entries);
+    Ok(())
+}
+
+pub fn print_log(format: Format, entries: &[Operation]) -> Result<()> {
+    if format.is_machine() {
+        return emit(
+            format,
+            &LogView {
+                schema: SCHEMA_VERSION,
+                entries: entries
+                    .iter()
+                    .map(|op| LogEntryView {
+                        id: op.id,
+                        ts: fmt_ts_rfc(op.ts_ms),
+                        command: op.command.clone(),
+                        status: op.status.to_string(),
+                        cwd: op.cwd.display().to_string(),
+                        files: affected_files(op),
+                    })
+                    .collect(),
+            },
+        );
+    }
+    if entries.is_empty() {
+        println!("Journal is empty.");
+        return Ok(());
+    }
+    for op in entries {
+        let files = affected_files(op);
+        let files = if files.is_empty() {
+            op.summary()
+        } else {
+            files.join(", ")
+        };
+        println!(
+            "{}  {}  {}",
+            console::style(fmt_ts_rfc(op.ts_ms)).dim(),
+            console::style(format!("{:<7}", op.command)).bold(),
+            files,
+        );
+    }
+    Ok(())
+}
+
 pub fn print_show(format: Format, op: &Operation) -> Result<()> {
     if format.is_machine() {
         return emit(
@@ -338,6 +449,125 @@ pub fn print_show(format: Format, op: &Operation) -> Result<()> {
             println!("    {} -> {}", t.origin.display(), t.file.display());
         }
     }
+    Ok(())
+}
+
+#[derive(Serialize)]
+struct PruneView {
+    schema: u32,
+    dry_run: bool,
+    candidates: usize,
+    removed: usize,
+    trash_purged: usize,
+    empty_trash: bool,
+    freed_bytes: u64,
+}
+
+fn human_bytes(n: u64) -> String {
+    const UNITS: [&str; 4] = ["B", "KB", "MB", "GB"];
+    let mut v = n as f64;
+    let mut u = 0;
+    while v >= 1024.0 && u < UNITS.len() - 1 {
+        v /= 1024.0;
+        u += 1;
+    }
+    if u == 0 {
+        format!("{n} B")
+    } else {
+        format!("{v:.1} {}", UNITS[u])
+    }
+}
+
+fn plural(n: usize) -> &'static str {
+    if n == 1 { "y" } else { "ies" }
+}
+
+pub fn print_prune(format: Format, report: &crate::engine::PruneReport) -> Result<()> {
+    let freed = report.size_before.saturating_sub(report.size_after);
+    if format.is_machine() {
+        return emit(
+            format,
+            &PruneView {
+                schema: SCHEMA_VERSION,
+                dry_run: report.dry_run,
+                candidates: report.candidates,
+                removed: report.removed,
+                trash_purged: report.trash_purged,
+                empty_trash: report.empty_trash,
+                freed_bytes: freed,
+            },
+        );
+    }
+    if report.dry_run {
+        if report.candidates == 0 {
+            println!("Nothing to prune.");
+            return Ok(());
+        }
+        println!(
+            "Would remove {} journal entr{}.",
+            report.candidates,
+            plural(report.candidates)
+        );
+        if report.empty_trash {
+            println!("Would also permanently delete their trashed files.");
+        } else {
+            println!("Trashed files would be kept (pass --empty-trash to delete them too).");
+        }
+        return Ok(());
+    }
+    if report.removed == 0 {
+        println!("Nothing to prune.");
+        return Ok(());
+    }
+    println!(
+        "Removed {} journal entr{}.",
+        report.removed,
+        plural(report.removed)
+    );
+    if report.empty_trash {
+        println!(
+            "Permanently deleted {} trashed item(s).",
+            report.trash_purged
+        );
+    }
+    if freed > 0 {
+        println!("Freed {} of database space.", human_bytes(freed));
+    }
+    Ok(())
+}
+
+pub fn print_config(format: Format, config: &crate::config::Config) -> Result<()> {
+    if format.is_machine() {
+        return emit(
+            format,
+            &ConfigView {
+                schema: SCHEMA_VERSION,
+                config,
+            },
+        );
+    }
+    println!("{}", console::style("cleanup").bold());
+    println!("  enabled            {}", config.cleanup.enabled);
+    println!("  max_age_days       {}", config.cleanup.max_age_days);
+    println!(
+        "  max_database_size  {} MB",
+        config.cleanup.max_database_size
+    );
+    println!("{}", console::style("storage").bold());
+    println!(
+        "  path               {}",
+        config.storage.path.as_deref().unwrap_or("(default)")
+    );
+    println!("{}", console::style("exclude").bold());
+    if config.exclude.paths.is_empty() {
+        println!("  paths              (none)");
+    } else {
+        for p in &config.exclude.paths {
+            println!("  paths              {p}");
+        }
+    }
+    println!("{}", console::style("logging").bold());
+    println!("  enabled            {}", config.logging.enabled);
     Ok(())
 }
 

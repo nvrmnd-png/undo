@@ -166,6 +166,14 @@ impl Trash {
         }
         Ok(warnings)
     }
+
+    pub fn purge(&self, tref: &TrashRef) -> Result<()> {
+        if fs::symlink_metadata(&tref.file).is_ok() {
+            ops::remove_node(&tref.file)?;
+        }
+        let _ = fs::remove_file(&tref.info);
+        Ok(())
+    }
 }
 
 fn trashinfo_body(origin: &Path) -> String {
