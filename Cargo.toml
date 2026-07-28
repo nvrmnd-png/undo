@@ -1,6 +1,6 @@
 [package]
 name = "undo"
-version = "0.1.3"
+version = "0.1.2"
 edition = "2024"
 description = "Undo shell filesystem operations: journaled mv/cp/rm and friends with a freedesktop trash safety net"
 license = "MIT"
